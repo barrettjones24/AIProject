@@ -1,0 +1,179 @@
+---
+title: "zillow project Barrett Jones"
+author: "Barrett Jones"
+date: "10/7/2017"
+output: pdf_document
+---
+
+below we take a quick look at the data and some summary stats. I have reduced the data size by quite a bit (to 10,000 observations) so I can do some test modeling. I am trying to predict the log error in the zillow housing price model. You can see above that the log error follows a symmetric distribution with very long tails, and that log error seems to vary greatly month to month.
+
+
+```{r, echo=FALSE, warning=FALSE, include=FALSE}
+
+### load libraries
+library(data.table)
+
+library(ggplot2)
+library(stringr)
+library(DT)
+library(lme4)
+library(gam)
+library(knitr)
+
+### read in the downloaded zillow data
+?fread
+properties <- fread('/Users/barrettjones/Documents/AIProjectBarrettJones/data/zillow_sub.csv')
+
+
+
+
+#head(properties)
+#head(transactions)
+#head(sample_submission)
+
+
+#summary(as.Date(transactions$transactiondate))
+
+## create month variable ####
+properties$month<-as.numeric(substr(properties$transactiondate,6,7))
+
+```
+
+## Hist of outcome 
+###(Zillow Housing Price Model log(Error))
+
+```{r, echo=FALSE}
+
+### get quick visual of the response variable and some summary stats. has a kind of normal distribution with huge tails
+
+hist(properties$logerror, breaks = 100, main = '',xlab = 'log(error)', ylab = '')
+#summary(transactions$logerror)
+
+```
+
+## Trend Log Error by Month
+
+```{r, echo=F}
+#### plot log error, which is the response variable by month, see that the accuracy of the zillow model varies greatly by month.
+
+plot(aggregate(properties$logerror, by=list(properties$month), FUN=c('mean')), type='l',
+     xlab='Month', ylab='log error')
+```
+
+I will try two different types of regression models in this data to see if I can get some good predictive power. First I will look at a multilevel model with random intercepts for zip code and city. After that I will take a look at a generalized additive model with some polynomial terms.
+
+## Model 1: Random Intercept Model
+
+```{r, echo=FALSE}
+#### create and compare models
+set.seed(1)
+mergdat<-properties
+
+#### hierarchial linear regression with random intercept for city and zip code
+error<-NULL
+for (i in 1:50){
+tsamp<-sample(1:nrow(mergdat), size = nrow(mergdat)*0.9)
+traindat<-mergdat[tsamp,]
+testdat<-mergdat[-tsamp,]
+mod3<-lmer(logerror~
+           calculatedfinishedsquarefeet
+           +month
+           +bathroomcnt
+           +bedroomcnt
+           +(1|regionidzip)
+           +(1|regionidcity)
+           , data = traindat)
+#summary(mod3)
+#BIC(mod3)
+#mean(abs(residuals(mod3)))
+preds<-predict(mod3, newdata = testdat, allow.new.levels=T)
+error[i]<-mean(abs(testdat$logerror-preds), na.rm=T)
+}
+
+summary(mod3)$call
+```
+
+### Summary of Errors
+
+```{r, echo=F}
+(summary(error))
+```
+### Distribution of Errors
+```{r, echo=F}
+hist(error)
+```
+
+So it looks like this model performs ok the median of the mean absolute error from the 50 cross validation cuts is `r median(error)`, but I notice that the relationship between bedroom/bathroom count and logerror is not linear. I will try a gam to fit a polynomial regression model.
+
+## Model 2: Generalized Additive Model
+
+```{r, echo=FALSE}
+##### generalized additive model
+set.seed(1)
+
+
+error<-NULL
+for (i in 1:50){
+tsamp<-sample(1:nrow(mergdat), size = nrow(mergdat)*0.9)
+traindat<-mergdat[tsamp,]
+testdat<-mergdat[-tsamp,]
+
+gammod<-gam(logerror~s(calculatedfinishedsquarefeet)
+            +s(bathroomcnt)
+            +s(bedroomcnt)
+            +as.factor(month)
+            ,data=traindat)
+#summary(gammod)
+#mean(abs(residuals(gammod)))
+#plot(fitted(gammod),residuals(gammod))
+preds<-predict(gammod, newdata = testdat, allow.new.levels=T)
+error[i]<-mean(abs(testdat$logerror-preds), na.rm=T)
+}
+
+summary(gammod)$call
+```
+
+### Summary of Errors
+
+```{r, echo=F}
+(summary(error))
+```
+
+### Distribution of Errors
+
+```{r, echo=F}
+hist(error)
+```
+
+looks like I got about the same performance from the gam. The median cross validate mean absolute error=`r median(error)`,is slightly different from the random intercept model, but not by much. Probably would be pretty similar results on the full data set. I will have to do some more testing, perhaps a hierarchial model with some polynomial terms with perform better. 
+
+```{r, include=FALSE}
+### remove NAs
+?na.omit
+mergdat2<-na.omit(mergdat, c('logerror','calculatedfinishedsquarefeet','bathroomcnt',
+                             'bedroomcnt','month','regionidzip','regionidcity'))
+
+gammod<-gam(logerror~s(calculatedfinishedsquarefeet)
+            +s(bathroomcnt)
+            +s(bedroomcnt)
+            +as.factor(month)
+            ,data=mergdat2)
+
+mod3<-lmer(logerror~
+           calculatedfinishedsquarefeet
+           +month
+           +bathroomcnt
+           +bedroomcnt
+           +(1|regionidzip)
+           +(1|regionidcity)
+           , data = mergdat2)
+
+#summary(gammod)
+#summary(mod3)
+
+df<-data.frame(Actual=mergdat2$logerror, GAM.fitted=gammod$fitted.values, RandInt.fitted=fitted(mod3))
+
+write.csv(df,'/Users/barrettjones/Documents/AIProjectBarrettJones/output/preds.csv')
+
+
+```
